@@ -1,0 +1,79 @@
+name: Phase 2 Fuzzer Tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install coverage
+
+      - name: Fixed-input tests
+        run: |
+          set -e
+          total=0; passed=0; failed=0
+          for prog in .github/programs/program_*.py; do
+            base=$(basename "$prog" .py)
+            for setdir in .github/fixed_inputs/$base/set_*; do
+              setn=$(basename "$setdir")
+              total=$((total+1))
+              echo "$ python3 src/fuzz.py $prog $setdir --budget 0"
+              out=$(python3 src/fuzz.py "$prog" "$setdir" --budget 0)
+              exp=$(cat ".github/fixed_expected/$base/$setn.txt")
+              if [ "$out" = "$exp" ]; then
+                echo "[PASS] $base / $setn"
+                passed=$((passed+1))
+              else
+                echo "[FAIL] $base / $setn: output mismatch"
+                failed=$((failed+1))
+              fi
+            done
+          done
+          echo "=============================="
+          echo "TOTAL: $total PASSED: $passed FAILED: $failed"
+          echo "=============================="
+          [ "$failed" -eq 0 ]
+
+      - name: Bug-finding tests
+        run: |
+          set -e
+          total=0; passed=0; failed=0
+          for prog in .github/programs/program_*.py; do
+            base=$(basename "$prog" .py)
+            total=$((total+1))
+            found=0
+            expected=$(cat ".github/campaign_expected/$base.txt")
+            for seed in 0 1 2; do
+              echo "$base seed=$seed:"
+              echo "$ python3 src/fuzz.py $prog .github/campaign_seeds/$base --budget 15000 --seed $seed"
+              out=$(python3 src/fuzz.py "$prog" ".github/campaign_seeds/$base" --budget 15000 --seed "$seed")
+              echo "$out" | grep -E "EXCEPTION|DONE" || true
+              if echo "$out" | grep -qF "$expected"; then
+                found=$((found+1))
+              fi
+            done
+            if [ "$found" -ge 2 ]; then
+              echo "[PASS] $base: $expected found in $found/3 campaigns"
+              passed=$((passed+1))
+            else
+              echo "[FAIL] $base: $expected found in $found/3 campaigns"
+              failed=$((failed+1))
+            fi
+          done
+          echo "=============================="
+          echo "TOTAL: $total PASSED: $passed FAILED: $failed"
+          echo "=============================="
+          [ "$failed" -eq 0 ]
+
+      - name: Random testing baseline
+        run: |
+          for prog in .github/programs/program_*.py; do
+            base=$(basename "$prog" .py)
+            echo "$base random seed=0:"
+            echo "$ python3 src/fuzz.py $prog .github/campaign_seeds/$base --budget 15000 --seed 0 --random"
+            python3 src/fuzz.py "$prog" ".github/campaign_seeds/$base" --budget 15000 --seed 0 --random | grep -E "EXCEPTION|DONE" || true
+          done
